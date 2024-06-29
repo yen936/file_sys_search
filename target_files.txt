@@ -1,2 +1,0 @@
-postData.json
-getNonce.py

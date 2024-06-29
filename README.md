@@ -2,6 +2,10 @@
 
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-blue.svg)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Cross Platform](https://img.shields.io/badge/cross-platform-orange)]
+
+
+
 
 EFS is a high-performance, multithreaded file search utility written in Rust. It's designed to quickly scan large directory structures and locate files based on various criteria.
 

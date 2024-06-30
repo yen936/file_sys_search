@@ -39,7 +39,10 @@ The compiled binary will be available in target/.
 Run the program with
 ```bash
 cd file_sys_search
+touch search_dirs.txt
+echo "<your-target-file>" >> search_dirs.txt
 cargo run
+
 ```
 
 ## Performance

@@ -1,29 +1,44 @@
-mod file_meta;
-//use file_meta::FileMetaData; 
-//use chrono::{DateTime, Utc};
+mod helper;
+
 use std::time::{SystemTime};
 use std::fs::File;
 use std::path::Path;
-use std::io::{BufRead, BufReader};
 use walkdir::WalkDir;
-use std::io::{self, Write};
+use std::io::{self, Write, BufReader, BufRead};
+use std::sync::{Arc, Mutex};
+use std::collections::VecDeque;
+use std::path::PathBuf;
+//use rayon;
+use rayon::prelude::*;
 
 // TODO:
 // Edgecases: permission issues, write out location (josn?)
 
 fn main() {
     println!("Welcome to the efficient share_drive open search: ESOD!");
-    // Search 
-    let tgt_file = get_user_input("Enter the file to search for: ");
-    let start = SystemTime::now();
 
-    let file = File::open("search_dirs.txt").expect("Failed to open file");
+    // Get user input for the target file
+    let target_file = helper::get_user_input("Enter the file to search for: ");
+
+    // Open and read the search directories file
+    let file = File::open("search_dirs.txt").expect("Failed to open search_dirs.txt");
     let reader = BufReader::new(file);
-    recurrsive_search(reader, &tgt_file);
 
-    let end = SystemTime::now();
-    let duration = end.duration_since(start).unwrap();
-    println!("it took {} milliseconds", duration.as_millis());
+    // Perform and time the recursive search
+    let start = SystemTime::now();
+    recurrsive_search(reader, &target_file);
+    let duration = SystemTime::now().duration_since(start).unwrap();
+    println!("Recursive search took {} milliseconds", duration.as_millis());
+
+    // Re-open and read the search directories file for the concurrent search
+    let file = File::open("search_dirs.txt").expect("Failed to open search_dirs.txt");
+    let reader = BufReader::new(file);
+
+    // Perform and time the concurrent search
+    let start = SystemTime::now();
+    concurrent_search(reader, &target_file);
+    let duration = SystemTime::now().duration_since(start).unwrap();
+    println!("Concurrent search took {} milliseconds", duration.as_millis());
     
 }
 
@@ -53,17 +68,43 @@ fn search_files_recursively(dir: &str, target_file: &str) {
             if filename == target_file {
                 println!("Found {} at this path {}", filename.to_str().unwrap(), path.display());
             }
-            //println!("  {}", path.display());
         }
     }
 
 }
 
-fn get_user_input(prompt: &str) -> String {
-    print!("{}", prompt);
-    io::stdout().flush().unwrap();
 
-    let mut input = String::new();
-    io::stdin().read_line(&mut input).expect("Failed to read line");
-    input.trim().to_string()
+fn concurrent_search(reader: BufReader<File>, target_file: &str) {
+    println!("Concurrently Searching directories:");
+
+    let dirs: Vec<String> = reader.lines()
+        .filter_map(Result::ok)
+        .collect();
+
+    let target_file = Arc::new(target_file.to_string());
+    let found_files = Arc::new(Mutex::new(Vec::new()));
+
+    dirs.par_iter().for_each(|dir| {
+        WalkDir::new(dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .par_bridge()
+            .for_each(|entry| {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Some(filename) = path.file_name() {
+                        if filename == target_file.as_str() {
+                            let mut found_files = found_files.lock().unwrap();
+                            found_files.push(path.display().to_string());
+                        }
+                    }
+                }
+            });
+    });
+
+    // Print out all found files (this could be written to a CSV or any other output)
+    let found_files = found_files.lock().unwrap();
+    for file in found_files.iter() {
+        println!("{}", file);
+    }
 }

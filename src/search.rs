@@ -1,10 +1,12 @@
 // src/search.rs
 
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{BufReader, BufRead};
 use std::sync::{Arc, Mutex};
-use rayon::prelude::*;
 use walkdir::WalkDir;
+use std::path::{Path, PathBuf};
+use std::thread;
+use std::collections::VecDeque;
 
 pub fn recurrsive_search(reader: BufReader<File>, target_file: &str) {
     println!("Recursively Searching directories:");
@@ -12,6 +14,7 @@ pub fn recurrsive_search(reader: BufReader<File>, target_file: &str) {
         match line {
             Ok(dir) => {
                 let dir = dir.trim();
+                println!("Dir: {}", dir);
                 search_files_recursively(dir, &target_file);
             }
             Err(e) => eprintln!("Error reading line: {}", e),
@@ -35,45 +38,88 @@ pub fn search_files_recursively(dir: &str, target_file: &str) {
     }
 }
 
+
+struct SearchState {
+    directory_stack: Arc<Mutex<VecDeque<PathBuf>>>,
+    found_files: Arc<Mutex<Vec<PathBuf>>>,
+    target_file: String,
+}
+
+impl SearchState {
+    fn new(target_file: &str) -> Self {
+        SearchState {
+            directory_stack: Arc::new(Mutex::new(VecDeque::new())),
+            found_files: Arc::new(Mutex::new(Vec::new())),
+            target_file: target_file.to_string(),
+        }
+    }
+}
+
+fn process_directory(directory: &Path, state: &SearchState, thread_id: usize) {
+    //println!("Thread {}: Processing directory: {:?}", thread_id, directory);
+    
+    if let Ok(entries) = fs::read_dir(directory) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let mut stack = state.directory_stack.lock().unwrap();
+                stack.push_back(path.clone());
+                // println!("Thread {}: Added directory to stack: {:?}", thread_id, path);
+                // println!("Thread {}: Current stack size: {}", thread_id, stack.len());
+            } else if path.is_file() {
+                if path.file_name().unwrap().to_str().unwrap() == state.target_file {
+                    state.found_files.lock().unwrap().push(path.clone());
+                    //println!("Thread {}: Found target file: {:?}", thread_id, path);
+                }
+            }
+        }
+    }
+}
+
 pub fn concurrent_search(reader: BufReader<File>, target_file: &str) {
-    println!("Concurrently Searching directories:");
+    let num_threads = 8;
+    let state = Arc::new(SearchState::new(target_file));
 
-    let dirs: Vec<String> = reader.lines()
-        .filter_map(Result::ok)
-        .collect();
+    // Read initial directories from the file
+    for line in reader.lines().flatten() {
+        state.directory_stack.lock().unwrap().push_back(PathBuf::from(line));
+    }
 
-    let target_file = Arc::new(target_file.to_string());
-    let found_files = Arc::new(Mutex::new(Vec::new()));
+    //println!("Initial stack size: {}", state.directory_stack.lock().unwrap().len());
 
-    // Customize ThreadPoolBuilder to set desired number of threads
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(4) // Adjust the number of threads as needed
-        .build()
-        .unwrap();
+    let mut handles = vec![];
 
-    pool.install(|| {
-        dirs.par_iter().for_each(|dir| {
-            WalkDir::new(dir)
-                .into_iter()
-                .filter_map(Result::ok)
-                .par_bridge()
-                .for_each(|entry| {
-                    let path = entry.path();
-                    if path.is_file() {
-                        if let Some(filename) = path.file_name() {
-                            if filename == target_file.as_str() {
-                                let mut found_files = found_files.lock().unwrap();
-                                found_files.push(path.display().to_string());
-                            }
-                        }
+    for thread_id in 0..num_threads {
+        let state = Arc::clone(&state);
+
+        let handle = thread::spawn(move || {
+            loop {
+                let directory = {
+                    let mut stack = state.directory_stack.lock().unwrap();
+                    stack.pop_front()
+                };
+
+                match directory {
+                    Some(dir) => process_directory(&dir, &state, thread_id),
+                    None => {
+                        //println!("Thread {}: No more directories to process", thread_id);
+                        break;
                     }
-                });
+                }
+            }
         });
-    });
 
-    // Print out all found files (this could be written to a CSV or any other output)
-    let found_files = found_files.lock().unwrap();
-    for file in found_files.iter() {
-        println!("{}", file);
+        handles.push(handle);
+    }
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+    // Print found files
+    let found = state.found_files.lock().unwrap();
+    println!("Total files found: {}", found.len());
+    for file in found.iter() {
+        println!("Found: {:?}", file);
     }
 }

@@ -30,7 +30,8 @@ struct SearchState {
     directory_stack: Arc<Mutex<VecDeque<PathBuf>>>,
     found_files: Arc<Mutex<Vec<PathBuf>>>,
     target_file: String,
-}```
+}
+```
 
 ## Preformance Benchmarking 
 
